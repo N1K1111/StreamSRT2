@@ -5,8 +5,6 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.example.streamsrt2.databinding.ActivityMainBinding
 import kotlinx.coroutines.launch
-import com.example.streamsrt2.SrtManager
-import com.example.streamsrt2.CameraManager
 import android.Manifest
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -17,7 +15,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var cameraManager: CameraManager
     private lateinit var srtManager: SrtManager
-    private val streamingUrl = "srt://your.server:port"
+    private val streamingUrl = "srt://89.169.135.34:9999" // Укажите ваш серверный адрес
     private val CAMERA_PERMISSION_REQUEST_CODE = 100
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -64,7 +62,7 @@ class MainActivity : AppCompatActivity() {
                 setupStreaming()
             } else {
                 Log.e("MainActivity", "Camera permission denied")
-                // Можно показать сообщение пользователю
+                // Можно показать сообщение пользователю, например, Toast
             }
         }
     }
@@ -72,19 +70,28 @@ class MainActivity : AppCompatActivity() {
     private fun setupStreaming() {
         lifecycleScope.launch {
             try {
-                Log.d("Streaming", "Initializing SRT...")
-                srtManager.initialize()
+                Log.d("Streaming", "Starting streaming to $streamingUrl...")
+                srtManager.startStreaming(streamingUrl) // Инициализация и запуск стриминга
                 Log.d("Streaming", "Starting camera...")
                 cameraManager.startCamera { frame ->
-                    Log.d("Streaming", "Frame received, sending...")
+                    Log.d("Streaming", "Frame received, sending ${frame.size} bytes...")
                     srtManager.sendFrame(frame)
                 }
-                Log.d("Streaming", "Starting stream to $streamingUrl...")
-                srtManager.start(streamingUrl)
                 Log.d("Streaming", "Streaming started successfully")
             } catch (e: Exception) {
                 Log.e("Streaming", "Error in setupStreaming: ${e.message}", e)
+                // Можно добавить UI-уведомление для пользователя
             }
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try {
+            srtManager.stop() // Останавливаем стриминг при завершении активности
+            cameraManager.stopCamera() // Останавливаем камеру
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Error stopping streaming: ${e.message}", e)
         }
     }
 }
