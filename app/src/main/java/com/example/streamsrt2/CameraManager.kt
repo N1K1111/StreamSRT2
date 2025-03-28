@@ -2,18 +2,23 @@ package com.example.streamsrt2
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.hardware.camera2.*
-import android.view.Surface
-import android.view.TextureView
 import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
+import android.hardware.camera2.*
+import android.media.Image
 import android.media.ImageReader
+import android.media.MediaCodec
+import android.media.MediaCodecInfo
+import android.media.MediaFormat
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
+import android.view.Surface
+import android.view.TextureView
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.nio.ByteBuffer
 
 class CameraManager(private val context: Context, private val textureView: TextureView) {
     private val systemCameraManager = context.getSystemService(Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
@@ -23,13 +28,25 @@ class CameraManager(private val context: Context, private val textureView: Textu
     private var imageReader: ImageReader? = null
     private val backgroundThread = HandlerThread("CameraBackground").apply { start() }
     private val backgroundHandler = Handler(backgroundThread.looper)
+    private var codec: MediaCodec? = null
 
     @SuppressLint("MissingPermission")
     suspend fun startCamera(onFrame: (ByteArray) -> Unit) = withContext(Dispatchers.IO) {
+        // Инициализация кодека H.264
+        codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC).apply {
+            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, 1920, 1080)
+            format.setInteger(MediaFormat.KEY_BIT_RATE, 4000000) // Битрейт 4 Мбит/с
+            format.setInteger(MediaFormat.KEY_FRAME_RATE, 30)
+            format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
+            format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1) // Ключевой кадр каждую секунду
+            configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            start()
+        }
+
         val cameraId = systemCameraManager.cameraIdList[0] // Используем первую камеру
         val cameraCaptureSession = CompletableDeferred<CameraCaptureSession>()
 
-        // Ждем, пока TextureView будет готов
+        // Ждём, пока TextureView будет готов
         if (!textureView.isAvailable) {
             val surfaceReady = CompletableDeferred<Unit>()
             textureView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
@@ -71,7 +88,7 @@ class CameraManager(private val context: Context, private val textureView: Textu
                         }
                         override fun onConfigureFailed(session: CameraCaptureSession) {
                             Log.e("CameraManager", "Session configuration failed")
-                            cameraCaptureSession.cancel() // Убрано true, оставлен вызов без аргументов
+                            cameraCaptureSession.cancel()
                         }
                     }, backgroundHandler)
                 }
@@ -95,10 +112,49 @@ class CameraManager(private val context: Context, private val textureView: Textu
         imageReader?.setOnImageAvailableListener({ reader ->
             val image = reader.acquireLatestImage()
             image?.let {
-                val buffer = it.planes[0].buffer // Берем только Y-плоскость для простоты
-                val bytes = ByteArray(buffer.remaining())
-                buffer.get(bytes)
-                onFrame(bytes)
+                // Извлекаем YUV данные
+                val yBuffer = it.planes[0].buffer
+                val uBuffer = it.planes[1].buffer
+                val vBuffer = it.planes[2].buffer
+
+                val ySize = yBuffer.remaining()
+                val uSize = uBuffer.remaining()
+                val vSize = vBuffer.remaining()
+
+                val data = ByteArray(ySize + uSize + vSize)
+                yBuffer.get(data, 0, ySize)
+                uBuffer.get(data, ySize, uSize)
+                vBuffer.get(data, ySize + uSize, vSize)
+
+                // Кодирование в H.264
+                val inputBufferIndex = codec!!.dequeueInputBuffer(10000)
+                if (inputBufferIndex >= 0) {
+                    val inputBuffer = codec!!.getInputBuffer(inputBufferIndex)
+                    inputBuffer?.clear()
+                    val capacity = inputBuffer?.capacity() ?: 0
+                    if (data.size > capacity) {
+                        Log.w("CameraManager", "Data size ${data.size} exceeds buffer capacity $capacity, truncating")
+                        inputBuffer?.put(data, 0, capacity) // Обрезаем данные до размера буфера
+                        codec!!.queueInputBuffer(inputBufferIndex, 0, capacity, System.nanoTime() / 1000, 0)
+                    } else {
+                        inputBuffer?.put(data)
+                        codec!!.queueInputBuffer(inputBufferIndex, 0, data.size, System.nanoTime() / 1000, 0)
+                    }
+                } else {
+                    Log.w("CameraManager", "No input buffer available")
+                }
+
+                val bufferInfo = MediaCodec.BufferInfo()
+                var outputBufferIndex = codec!!.dequeueOutputBuffer(bufferInfo, 10000)
+                while (outputBufferIndex >= 0) {
+                    val outputBuffer = codec!!.getOutputBuffer(outputBufferIndex)
+                    val encodedData = ByteArray(bufferInfo.size)
+                    outputBuffer?.get(encodedData)
+                    onFrame(encodedData) // Отправляем закодированные данные
+                    codec!!.releaseOutputBuffer(outputBufferIndex, false)
+                    outputBufferIndex = codec!!.dequeueOutputBuffer(bufferInfo, 0)
+                }
+
                 it.close()
             }
         }, backgroundHandler)
@@ -111,9 +167,12 @@ class CameraManager(private val context: Context, private val textureView: Textu
             captureSession?.close()
             cameraDevice?.close()
             imageReader?.close()
+            codec?.stop()
+            codec?.release()
             captureSession = null
             cameraDevice = null
             imageReader = null
+            codec = null
         } catch (e: Exception) {
             Log.e("CameraManager", "Error stopping camera: ${e.message}", e)
         } finally {

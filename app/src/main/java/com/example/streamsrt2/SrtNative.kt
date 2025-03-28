@@ -6,7 +6,8 @@ object SrtNative {
     }
 
     external fun initSrt(): Int
-    external fun startStreaming(url: String): Int
+    external fun startStreaming(url: String, streamid: String): Int  // Обновлено
     external fun stopStreaming(): Int
     external fun sendFrame(data: ByteArray): Int
+    external fun receiveFrame(): ByteArray?
 }

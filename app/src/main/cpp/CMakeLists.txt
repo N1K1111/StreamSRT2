@@ -12,7 +12,6 @@ if (ANDROID)
     FetchContent_MakeAvailable(android_openssl)
     include(${android_openssl_SOURCE_DIR}/android_openssl.cmake)
 
-    # Указываем пути к OpenSSL для Android
     set(OPENSSL_ROOT_DIR ${android_openssl_SOURCE_DIR})
     set(OPENSSL_INCLUDE_DIR ${android_openssl_SOURCE_DIR}/ssl_3/include)
     set(OPENSSL_CRYPTO_LIBRARY ${android_openssl_SOURCE_DIR}/ssl_3/${ANDROID_ABI}/libcrypto.a)
@@ -28,7 +27,6 @@ set(ENABLE_APPS OFF CACHE BOOL "Disable SRT apps" FORCE)
 set(ENABLE_SHARED ON CACHE BOOL "Enable shared SRT library" FORCE)
 set(ENABLE_STATIC OFF CACHE BOOL "Disable static SRT library" FORCE)
 
-# Указываем зависимости OpenSSL перед добавлением подмодуля SRT
 find_package(OpenSSL REQUIRED)
 add_subdirectory(srt)
 
@@ -40,9 +38,12 @@ add_library(
 
 find_library(log-lib log)
 
+# Добавляем путь к сгенерированным файлам подмодуля SRT
 target_include_directories(
         srt-lib PRIVATE
         ${CMAKE_SOURCE_DIR}/srt/srtcore
+        ${CMAKE_SOURCE_DIR}/srt/common
+        ${CMAKE_BINARY_DIR}/srt  # Путь к папке сборки SRT, где лежит version.h
 )
 
 target_link_libraries(
